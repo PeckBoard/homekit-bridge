@@ -1,0 +1,33 @@
+{
+  "name": "homekit-bridge",
+  "version": "0.1.0",
+  "description": "Local HTTP bridge that controls HomeKit IP accessories (HAP controller)",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "homekit-bridge": "dist/homekit-bridge.mjs"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/homekit-bridge.mjs",
+    "fake-accessory": "node scripts/fake-accessory.mjs",
+    "smoke": "node scripts/smoke-bundle.mjs",
+    "gen-names": "node scripts/gen-hap-names.mjs"
+  },
+  "dependencies": {
+    "hap-controller": "^0.10.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "hap-nodejs": "^0.14.3",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,0 +1,29 @@
+# systemd user unit for homekit-bridge. App Manager installs it for you;
+# by hand (needs Node.js >= 20 — the wrapper pins the node binary so the unit
+# works even when node is only on an nvm PATH):
+#
+#   install -Dm644 homekit-bridge.mjs ~/.local/lib/homekit-bridge/homekit-bridge.mjs
+#   printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$(command -v node)" \
+#     "$HOME/.local/lib/homekit-bridge/homekit-bridge.mjs" > ~/.local/bin/homekit-bridge
+#   chmod 755 ~/.local/bin/homekit-bridge
+#   install -Dm644 homekit-bridge.service ~/.config/systemd/user/homekit-bridge.service
+#   mkdir -p ~/.config/homekit-bridge
+#   head -c 32 /dev/urandom | base64 > ~/.config/homekit-bridge/token
+#   chmod 600 ~/.config/homekit-bridge/token
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now homekit-bridge
+#   loginctl enable-linger "$USER"   # keep it running while logged out
+[Unit]
+Description=homekit-bridge: local HTTP bridge that controls HomeKit IP accessories
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/homekit-bridge --bind 127.0.0.1:7782 --token-file %h/.config/homekit-bridge/token
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,59 @@
+name: Release
+
+# Builds the single-file bundle dist/homekit-bridge.mjs (runs on system
+# node >= 20) and attaches homekit-bridge.mjs + homekit-bridge.mjs.sha256 to
+# the GitHub release for the pushed tag (`v*`). Re-running a tag re-uploads
+# with --clobber.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test and build
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm test
+          npm run build
+          npm run smoke
+          cp dist/homekit-bridge.mjs homekit-bridge.mjs
+          sha256sum homekit-bridge.mjs > homekit-bridge.mjs.sha256
+          cat homekit-bridge.mjs.sha256
+
+      - name: Bundle runs on node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node homekit-bridge.mjs --version
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" homekit-bridge.mjs homekit-bridge.mjs.sha256 --clobber
+            gh release edit "$TAG" --draft=false --latest
+          else
+            gh release create "$TAG" homekit-bridge.mjs homekit-bridge.mjs.sha256 --title "$TAG" \
+              --notes "homekit-bridge $TAG — single-file Node bundle (needs node >= 20). See README for install." --latest
+          fi
