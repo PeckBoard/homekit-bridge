@@ -137,15 +137,21 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     JSON.stringify({ id: fake.id, setup_code: fake.setupCode, port: fake.port, address: "127.0.0.1", name: fake.name }) +
       "\n",
   );
-  createInterface({ input: process.stdin }).on("line", (line) => {
-    const [cmd, arg] = line.trim().split(/\s+/);
-    if (cmd === "on") fake.setOn(true);
-    else if (cmd === "off") fake.setOn(false);
-    else if (cmd === "b") fake.setBrightness(Number(arg));
-    else if (cmd === "t") fake.setTemperature(Number(arg));
-    else if (cmd) process.stderr.write("commands: on | off | b <0-100> | t <celsius>\n");
-  });
   const stop = () => fake.stop().finally(() => process.exit(0));
+  createInterface({ input: process.stdin })
+    .on("line", (line) => {
+      const [cmd, arg] = line.trim().split(/\s+/);
+      if (cmd === "on") fake.setOn(true);
+      else if (cmd === "off") fake.setOn(false);
+      else if (cmd === "b") fake.setBrightness(Number(arg));
+      else if (cmd === "t") fake.setTemperature(Number(arg));
+      else if (cmd) process.stderr.write("commands: on | off | b <0-100> | t <celsius>\n");
+    })
+    // stdin EOF = the test that spawned us died. Never linger advertising a
+    // fake accessory on the user's LAN (it shows up in their Discover tab).
+    .on("close", stop);
+  // Hard cap for the same reason, in case stdin is held open by an orphan.
+  setTimeout(stop, 15 * 60 * 1000).unref();
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 }
