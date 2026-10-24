@@ -75,11 +75,12 @@ async function route(bridge: Bridge, req: IncomingMessage, res: ServerResponse, 
     if (res.destroyed) return;
     return send(res, 200, { seq: bridge.events.latest, events });
   }
+  if (parts[0] === "hue") return routeHue(bridge, req, res, url, method, parts);
   if (parts[0] !== "devices") throw new ApiError("not_found", `no route ${method} ${url.pathname}`);
 
   if (parts.length === 1) {
     if (method === "GET") {
-      return send(res, 200, { devices: [...bridge.devices.values()].map((d) => bridge.toDevice(d)) });
+      return send(res, 200, { devices: bridge.listDevices().map((d) => bridge.toDevice(d)) });
     }
   } else if (parts.length === 2 && parts[1] === "pair") {
     if (method === "POST") {
@@ -119,6 +120,42 @@ async function route(bridge: Bridge, req: IncomingMessage, res: ServerResponse, 
     throw new ApiError("not_found", `no route ${method} ${url.pathname}`);
   }
   throw new ApiError("bad_request", `method ${method} not allowed on ${url.pathname}`);
+}
+
+/** `/hue/...` (BRIDGE_API.md "Philips Hue"). */
+async function routeHue(
+  bridge: Bridge,
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  method: string,
+  parts: string[],
+): Promise<void> {
+  const hue = bridge.hue;
+  const [, a, b, c] = parts;
+  if (a === "bridges" && parts.length === 2 && method === "GET") {
+    if (flag(url, "refresh")) await hue.discovery.refresh(3000);
+    return send(res, 200, { bridges: hue.listBridges() });
+  }
+  if (a === "bridges" && parts.length === 3 && method === "DELETE") {
+    return send(res, 200, hue.unlink(b));
+  }
+  if (a === "link" && parts.length === 2 && method === "POST") {
+    return send(res, 201, await hue.link(await readJson(req)));
+  }
+  if (a === "groups" && parts.length === 2 && method === "GET") {
+    return send(res, 200, { groups: hue.groups() });
+  }
+  if (a === "groups" && parts.length === 3 && method === "POST") {
+    return send(res, 200, await hue.setGroup(b, await readJson(req)));
+  }
+  if (a === "scenes" && parts.length === 2 && method === "GET") {
+    return send(res, 200, { scenes: hue.scenes(url.searchParams.get("group_id")) });
+  }
+  if (a === "scenes" && parts.length === 4 && c === "recall" && method === "POST") {
+    return send(res, 200, await hue.recall(b));
+  }
+  throw new ApiError("not_found", `no route ${method} ${url.pathname}`);
 }
 
 export function createApiServer(bridge: Bridge, token: string): Server {

@@ -11,6 +11,10 @@ export const ERROR_STATUS = {
   read_only: 400,
   invalid_value: 400,
   timeout: 504,
+  link_button_not_pressed: 409,
+  not_linked: 404,
+  hue_unreachable: 502,
+  hue_cert_changed: 502,
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_STATUS;

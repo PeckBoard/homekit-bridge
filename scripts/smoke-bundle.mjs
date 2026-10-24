@@ -81,4 +81,26 @@ check(Array.isArray(disc.body.accessories), `/discover (${disc.body.accessories?
 for (let i = 0; i < 3; i++) await api("GET", "/discover?refresh=1");
 const alive = await api("GET", "/health");
 check(bridge.exitCode === null && alive.body.ok === true, "still alive after mDNS re-queries", alive);
+
+// Philips Hue: link (button press via the fake's stdin), list, write, unlink.
+const hueFake = spawn(process.execPath, [join(here, "scripts/fake-hue-bridge.mjs"), "--port", "0"], { stdio: ["pipe", "pipe", "inherit"] });
+procs.push(hueFake);
+const hue = await new Promise((resolve) => createInterface({ input: hueFake.stdout }).once("line", (l) => resolve(JSON.parse(l))));
+const linkBody = { bridge_id: hue.bridge_id, address: `${hue.address}:${hue.port}` };
+const early = await api("POST", "/hue/link", linkBody);
+check(early.status === 409 && early.body.code === "link_button_not_pressed", "hue link refused before button press", early);
+hueFake.stdin.write("press\n");
+await new Promise((r) => setTimeout(r, 200));
+const linked = await api("POST", "/hue/link", linkBody);
+check(linked.status === 201 && linked.body.linked && linked.body.lights === 2, "hue link after button press", linked);
+const hueLight = (await api("GET", "/devices")).body.devices.find((d) => d.source === "hue" && d.room === "Living room");
+check(!!hueLight, "hue light listed with room", hueLight);
+const hueSet = await api("POST", `/devices/${encodeURIComponent(hueLight.id)}/characteristics`, { set: [{ aid: 1, iid: 11, value: 30 }] });
+const bri = hueSet.body.device?.accessories[0].services.flatMap((s) => s.characteristics).find((c) => c.iid === 11);
+check(hueSet.status === 200 && bri?.value === 30, "hue set brightness=30", hueSet);
+const unlinked = await api("DELETE", `/hue/bridges/${hue.bridge_id}`);
+check(unlinked.body.ok === true, "hue unlink", unlinked);
+hueFake.stdin.end(); // EOF: the fake must exit on its own
+const hueExit = await Promise.race([new Promise((r) => hueFake.once("exit", () => r(true))), new Promise((r) => setTimeout(() => r(false), 5000))]);
+check(hueExit, "fake hue bridge exits on stdin EOF");
 done(0);

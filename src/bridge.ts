@@ -3,6 +3,7 @@ import { DeviceSession, mapError } from "./device.js";
 import { ApiError, isNetworkError, withTimeout } from "./errors.js";
 import { EventLog } from "./events.js";
 import { HttpClient, PairMethods } from "./hap.js";
+import { HueLight, HueManager } from "./hue/hue.js";
 import { log } from "./log.js";
 import { UUID, categoryName, guessCategory, infoValue, toAccessoriesJson } from "./model.js";
 import { normalizeId, parseSetupCode } from "./setupCode.js";
@@ -44,6 +45,7 @@ export class Bridge {
   readonly events = new EventLog(500);
   readonly devices = new Map<string, DeviceSession>();
   readonly discovery: Discovery;
+  readonly hue: HueManager;
   private readonly store: Store;
   private readonly timeoutMs: number;
   private readonly pairing = new Set<string>();
@@ -61,19 +63,27 @@ export class Bridge {
       dev.updateAddress(d.address, d.port);
       if (d.config_number != null) dev.configChanged(d.config_number);
     });
+    this.hue = new HueManager({
+      dataDir: opts.dataDir,
+      discovery: opts.discovery,
+      events: this.events,
+      timeoutMs: this.timeoutMs,
+    });
   }
 
-  /** Load pairings, start sessions and the mDNS browse. */
+  /** Load pairings + Hue links, start sessions and the mDNS browses. */
   start(): void {
     for (const stored of this.store.load().values()) {
       log.info(`loaded pairing ${stored.id} (${stored.address}:${stored.port})`);
       this.addSession(stored).start();
     }
     this.discovery.start();
+    this.hue.start();
   }
 
   async stop(): Promise<void> {
     this.discovery.stop();
+    this.hue.stop();
     this.events.wakeAll();
     await Promise.all([...this.devices.values()].map((d) => d.close()));
   }
@@ -88,8 +98,9 @@ export class Bridge {
     return s;
   }
 
-  /** Session by URL id (with or without colons). */
-  get(rawId: string): DeviceSession {
+  /** Session by URL id (with or without colons), or a Hue light (`hue:…`). */
+  get(rawId: string): DeviceSession | HueLight {
+    if (rawId.startsWith("hue:")) return this.hue.light(rawId);
     const id = normalizeId(rawId);
     const dev = id ? this.devices.get(id) : undefined;
     if (dev) return dev;
@@ -101,7 +112,7 @@ export class Bridge {
 
   health() {
     const all = [...this.devices.values()];
-    return { paired: all.length, connected: all.filter((d) => d.connected).length };
+    return { paired: all.length, connected: all.filter((d) => d.connected).length, ...this.hue.health() };
   }
 
   discover() {
@@ -118,7 +129,13 @@ export class Bridge {
     }));
   }
 
-  toDevice(d: DeviceSession) {
+  /** Every device: paired HomeKit accessories, then lights of linked Hue bridges. */
+  listDevices(): (DeviceSession | HueLight)[] {
+    return [...this.devices.values(), ...this.hue.allLights()];
+  }
+
+  toDevice(d: DeviceSession | HueLight) {
+    if (d instanceof HueLight) return this.hue.toDevice(d);
     const s = d.stored;
     const acc1 = s.accessories.find((a) => a.aid === 1) ?? s.accessories[0];
     const accessoryName = infoValue(acc1, UUID.name, d.values);
@@ -136,6 +153,9 @@ export class Bridge {
       port: s.port,
       connected: d.connected,
       last_seen: d.lastSeen,
+      source: "homekit" as const,
+      room: null,
+      room_id: null,
       accessories: toAccessoriesJson(s.accessories, d.values),
     };
   }
@@ -213,6 +233,9 @@ export class Bridge {
 
   async unpair(rawId: string, force: boolean): Promise<{ ok: true; removed_from_accessory: boolean }> {
     const dev = this.get(rawId);
+    if (dev instanceof HueLight) {
+      throw new ApiError("bad_request", `${dev.id} is a Hue light: unlink the bridge instead`);
+    }
     let removed = false;
     try {
       await dev.removePairing();
@@ -228,9 +251,13 @@ export class Bridge {
     return { ok: true, removed_from_accessory: removed };
   }
 
-  rename(rawId: string, name: unknown): DeviceSession {
+  rename(rawId: string, name: unknown): DeviceSession | HueLight {
     const dev = this.get(rawId);
     if (typeof name !== "string" || !name.trim()) throw new ApiError("bad_request", "name must be a non-empty string");
+    if (dev instanceof HueLight) {
+      this.hue.rename(dev, name.trim());
+      return dev;
+    }
     dev.stored.name = name.trim();
     this.persist();
     return dev;

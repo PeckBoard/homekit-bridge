@@ -1,7 +1,8 @@
 # homekit-bridge
 
 A small local daemon that acts as a **HomeKit controller** for IP accessories
-(HAP over TCP/mDNS) and exposes them over a token-protected HTTP API on
+(HAP over TCP/mDNS) and a **Philips Hue** client (local CLIP v2 via a linked
+Hue Bridge), and exposes both over a token-protected HTTP API on
 `127.0.0.1:7782`. It is the backend of the Peckboard `homekit` plugin; the
 API is specified in [`BRIDGE_API.md`](BRIDGE_API.md).
 
@@ -15,6 +16,9 @@ system `node` (>= 20).
   `_hap._tcp`. No Bluetooth LE, no Thread, no Matter.
 - The bridge is a controller, not a HomeKit bridge: nothing is exposed back to
   Apple Home.
+- **Hue**: lights, rooms, zones and scenes through a linked Hue Bridge (see
+  [Philips Hue](#philips-hue)). No Bluetooth-only bulbs, entertainment areas,
+  sensors or switches.
 
 ## Install
 
@@ -91,18 +95,55 @@ factory-reset before it can be paired again.
   perms before anything is sent (`invalid_value`, `read_only`).
 
 HTTP status per error code: `bad_request`, `bad_setup_code`, `invalid_value`,
-`read_only` → 400; `unauthorized` → 401; `not_found`, `not_paired` → 404;
-`already_paired` → 409; `pair_failed`, `unreachable` → 502; `timeout` → 504.
+`read_only` → 400; `unauthorized` → 401; `not_found`, `not_paired`,
+`not_linked` → 404; `already_paired`, `link_button_not_pressed` → 409;
+`pair_failed`, `unreachable`, `hue_unreachable`, `hue_cert_changed` → 502;
+`timeout` → 504.
+
+## Philips Hue
+
+Since 0.2.0 the daemon also controls lights behind a **Hue Bridge** through
+its local CLIP v2 API (HTTPS, `hue-application-key`), with live state from
+the bridge's `/eventstream/clip/v2`. Lights stay in Apple Home and the Hue
+app; nothing is unpaired. Plain-HTTP API v1 is never used.
+
+- **Discovery**: mDNS `_hue._tcp`; when that finds nothing, Signify's
+  `https://discovery.meethue.com` (asked at most once per 15 min, cached).
+  `--no-discovery` turns both off.
+- **Linking**: `POST /hue/link {"bridge_id", "address"}` answers `409
+  link_button_not_pressed` until the bridge's link button is pressed
+  (poll every 2 s). `address` may be `host:port` for a bridge on a
+  non-standard port. The application key (and client key) is stored in
+  `{data-dir}/hue.json`, mode `0600`. `DELETE /hue/bridges/{id}` forgets it.
+- **TLS**: the bridge certificate must chain to a Signify Hue root CA
+  (`root-bridge` or `Hue Root CA 01`, embedded) with CN = the lower-case
+  bridge id. A bridge on old firmware with a self-signed cert has it pinned
+  (SHA-256) when linking; a different cert later fails with
+  `hue_cert_changed` (unlink + link again if it is expected). Once such a
+  bridge serves a CA-signed cert the pin is dropped.
+- **Lights** appear in `/devices` as `hue:<bridge_id>:<light_id>` with
+  `source: "hue"`, their room, and fixed iids: on 10, brightness 11, hue 12,
+  saturation 13, color temperature 14 (mired). Hue/saturation are converted
+  to CIE xy and clamped to the light's colour gamut. Writing brightness 0
+  turns the light off; writing a brightness > 0 without `on` also turns it
+  on (like the Home app).
+- **Rooms, zones, scenes**: `GET /hue/groups`, `POST /hue/groups/{id}`
+  (`on` / `brightness`), `GET /hue/scenes`, `POST /hue/scenes/{id}/recall`.
+- One event stream per linked bridge, reconnected with backoff (1 s → 60 s)
+  and followed by a full resync. Requests to a bridge are serialized and
+  paced to Signify's limits: ≥ 100 ms between light commands, ≥ 1 s
+  between group / scene commands.
 
 ## Development
 
 ```bash
 npm ci
-npm test             # vitest: unit + a real hap-nodejs accessory end-to-end
+npm test             # vitest: unit + hap-nodejs accessory and fake Hue bridge end-to-end
 npx tsc --noEmit
 npm run build        # dist/homekit-bridge.mjs
-npm run smoke        # boots the bundle + fake accessory as processes
+npm run smoke        # boots the bundle + fake accessory + fake Hue bridge as processes
 npm run fake-accessory -- --port 51826   # fake lightbulb for manual testing
+npm run fake-hue-bridge                  # fake Hue bridge for manual testing
 npm run gen-names    # regenerate src/hapNames.ts from hap-nodejs
 ```
 
@@ -112,5 +153,13 @@ a read-only temperature sensor and prints
 `t 23.5` on its stdin to change state from the accessory side. It is
 dev-only and never part of the bundle.
 
+`scripts/fake-hue-bridge.mjs [--port 0] [--host 127.0.0.1] [--advertise]`
+serves a fake Hue Bridge (self-signed cert, two lights in "Living room", zone
+"Reading", scene "Relax") and prints `{"bridge_id","address","port"}`. Link
+it with `POST /hue/link` and `address: "<address>:<port>"`; type `press` on
+its stdin to press the link button, `on 1` / `off 2` / `b 1 40` to change a
+light from the bridge side, `drop` to cut the event streams. It exits on
+stdin EOF and after 15 minutes, and advertises on mDNS only with
+`--advertise`. Dev-only, never part of the bundle.
 Releases: push a `v*` tag; `.github/workflows/release.yml` tests, builds and
 attaches `homekit-bridge.mjs` + `homekit-bridge.mjs.sha256`.

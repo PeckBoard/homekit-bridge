@@ -1,7 +1,7 @@
 {
   "name": "homekit-bridge",
-  "version": "0.1.0",
-  "description": "Local HTTP bridge that controls HomeKit IP accessories (HAP controller)",
+  "version": "0.2.0",
+  "description": "Local HTTP bridge that controls HomeKit IP accessories (HAP controller) and Philips Hue lights (CLIP v2)",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -17,10 +17,12 @@
     "test": "vitest run",
     "start": "node dist/homekit-bridge.mjs",
     "fake-accessory": "node scripts/fake-accessory.mjs",
+    "fake-hue-bridge": "node scripts/fake-hue-bridge.mjs",
     "smoke": "node scripts/smoke-bundle.mjs",
     "gen-names": "node scripts/gen-hap-names.mjs"
   },
   "dependencies": {
+    "dnssd": "^0.4.1",
     "hap-controller": "^0.10.2"
   },
   "devDependencies": {
